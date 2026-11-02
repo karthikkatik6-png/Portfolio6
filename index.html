@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>JNTUH SGPA &amp; CGPA Tracker</title>
+<style>
+  :root {
+    --bg: #f6f7f3; --surface: #ffffff; --ink: #1b2a2f; --muted: #5d6c70;
+    --line: #d9dfdc; --accent: #0f6b5c; --accent-ink: #ffffff; --warn: #b3261e; --bar: #0f6b5c;
+  }
+  :root:not([data-theme="light"]) { color-scheme: light; }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --bg: #12191b; --surface: #1b2528; --ink: #e8efec; --muted: #9bb0ab;
+      --line: #2e3c3f; --accent: #4cc2a9; --accent-ink: #0b1a17; --warn: #ff8a80; --bar: #4cc2a9;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 760px; margin: 0 auto; padding: 24px 16px 64px; }
+  h1 { font-size: 1.5rem; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 20px; font-size: .9rem; }
+  .summary { background: var(--accent); color: var(--accent-ink); border-radius: 12px; padding: 20px; display: flex; flex-wrap: wrap; gap: 24px; align-items: flex-end; }
+  .big { font-size: 3rem; font-weight: 700; line-height: 1; }
+  .summary small { display: block; opacity: .85; font-size: .8rem; margin-bottom: 4px; }
+  .chart { display: flex; align-items: flex-end; gap: 8px; height: 90px; margin: 16px 0 24px; padding: 0 4px; border-bottom: 1px solid var(--line); }
+  .col { flex: 1; max-width: 56px; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; height: 100%; font-size: .7rem; color: var(--muted); }
+  .col div { width: 100%; background: var(--bar); border-radius: 4px 4px 0 0; min-height: 2px; }
+  .sem { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 14px; margin-bottom: 16px; }
+  .sem-head { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; }
+  .sem-head input { width: 90px; font-weight: 600; }
+  .sgpa { margin-left: auto; font-weight: 700; color: var(--accent); }
+  .row { display: grid; grid-template-columns: 1fr 70px 80px 36px; gap: 6px; margin-bottom: 6px; }
+  input, select { font: inherit; color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; min-width: 0; }
+  input:focus-visible, select:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  button { font: inherit; cursor: pointer; border: 1px solid var(--line); background: var(--surface); color: var(--ink); border-radius: 6px; padding: 6px 12px; }
+  button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+  button.danger { color: var(--warn); }
+  .actions { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+  .note { color: var(--muted); font-size: .8rem; margin-top: 28px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>JNTUH SGPA &amp; CGPA Tracker</h1>
+  <p class="sub">Add your semesters and subjects. Everything is saved in your browser only.</p>
+
+  <section class="summary" aria-live="polite">
+    <div><small>CGPA</small><span class="big" id="cgpa">–</span></div>
+    <div><small>Approx. percentage</small><span class="big" id="pct">–</span></div>
+    <div><small>Total credits</small><span class="big" id="credits">–</span></div>
+  </section>
+
+  <div class="chart" id="chart" aria-label="SGPA per semester"></div>
+  <div id="app"></div>
+  <button class="primary" data-act="addsem">Add semester</button>
+
+  <p class="note">Grade scale used: O 10, A+ 9, A 8, B+ 7, B 6, C 5, F/Ab 0. Percentage = (CGPA − 0.75) × 10.
+  Check both against your own regulation (R18, R22…) before relying on them.</p>
+</main>
+
+<script>
+/* ============ 1. DATA: one place for the grading scale ============ */
+const GRADE_POINTS = { "O": 10, "A+": 9, "A": 8, "B+": 7, "B": 6, "C": 5, "F": 0, "Ab": 0 };
+const COUNT_FAILED_CREDITS = true;   // one clearly named rule: failed subjects stay in the denominator
+const STORAGE_KEY = "jntuh-tracker-v1";
+
+/* ============ 2. PURE LOGIC: no DOM, easy to test ============ */
+// Returns { points, credits } for a list of subjects. Skips invalid rows.
+function totals(subjects) {
+  let points = 0, credits = 0;
+  for (const s of subjects) {
+    const c = Number(s.credits), g = GRADE_POINTS[s.grade];
+    if (!(c > 0) || g === undefined) continue;
+    if (!COUNT_FAILED_CREDITS && g === 0) continue;
+    points += c * g;
+    credits += c;
+  }
+  return { points, credits };
+}
+function calcSGPA(subjects) {
+  const t = totals(subjects);
+  return t.credits === 0 ? null : t.points / t.credits;   // avoids divide-by-zero
+}
+function calcCGPA(semesters) {
+  // Weighted by credits, NOT an average of SGPAs
+  let p = 0, c = 0;
+  for (const sem of semesters) { const t = totals(sem.subjects); p += t.points; c += t.credits; }
+  return { cgpa: c === 0 ? null : p / c, credits: c };
+}
+const toPercentage = cgpa => (cgpa - 0.75) * 10;
+const fmt = (n, d = 2) => (n === null ? "–" : n.toFixed(d));
+
+// Quick self-tests: open the browser console to see results
+function runTests() {
+  console.assert(calcSGPA([{credits: 3, grade: "O"}, {credits: 4, grade: "O"}]) === 10, "all O = 10");
+  console.assert(calcSGPA([]) === null, "empty = null");
+  console.assert(Math.abs(calcSGPA([{credits: 3, grade: "A"}, {credits: 1, grade: "O"}]) - 8.5) < 1e-9, "weighted");
+  console.log("Tests finished (no assertion errors above means all passed)");
+}
+
+/* ============ 3. STATE + STORAGE ============ */
+const newSubject = () => ({ name: "", credits: 3, grade: "A" });
+let state = load() || { semesters: [{ name: "1-1", subjects: [newSubject()] }] };
+
+function load() {
+  try { return JSON.parse(localStorage.getItem(STORAGE_KEY)); } catch (e) { return null; }
+}
+function save() {
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch (e) { /* storage may be blocked */ }
+}
+
+/* ============ 4. UI ============ */
+const app = document.getElementById("app");
+const esc = s => String(s).replace(/[&<>"']/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
+
+// Rebuild the DOM (only on add/remove, so typing never loses focus)
+function render() {
+  app.innerHTML = state.semesters.map((sem, si) => `
+    <section class="sem">
+      <div class="sem-head">
+        <input data-f="semname" data-si="${si}" value="${esc(sem.name)}" aria-label="Semester name">
+        <span class="sgpa">SGPA <span id="sgpa-${si}">–</span></span>
+      </div>
+      ${sem.subjects.map((s, bi) => `
+        <div class="row">
+          <input data-f="name" data-si="${si}" data-bi="${bi}" value="${esc(s.name)}" placeholder="Subject" aria-label="Subject name">
+          <input data-f="credits" data-si="${si}" data-bi="${bi}" type="number" min="0" step="0.5" value="${esc(s.credits)}" aria-label="Credits">
+          <select data-f="grade" data-si="${si}" data-bi="${bi}" aria-label="Grade">
+            ${Object.keys(GRADE_POINTS).map(g => `<option${g === s.grade ? " selected" : ""}>${g}</option>`).join("")}
+          </select>
+          <button class="danger" data-act="delsub" data-si="${si}" data-bi="${bi}" aria-label="Remove subject">×</button>
+        </div>`).join("")}
+      <div class="actions">
+        <button data-act="addsub" data-si="${si}">Add subject</button>
+        <button class="danger" data-act="delsem" data-si="${si}">Delete semester</button>
+      </div>
+    </section>`).join("");
+  update();
+}
+
+// Recompute and show numbers (no DOM rebuild)
+function update() {
+  state.semesters.forEach((sem, si) => {
+    document.getElementById("sgpa-" + si).textContent = fmt(calcSGPA(sem.subjects));
+  });
+  const { cgpa, credits } = calcCGPA(state.semesters);
+  document.getElementById("cgpa").textContent = fmt(cgpa);
+  document.getElementById("pct").textContent = cgpa === null ? "–" : fmt(Math.max(0, toPercentage(cgpa)), 1) + "%";
+  document.getElementById("credits").textContent = credits || "–";
+  document.getElementById("chart").innerHTML = state.semesters.map(sem => {
+    const v = calcSGPA(sem.subjects);
+    return `<div class="col"><span>${fmt(v, 1)}</span><div style="height:${(v || 0) * 8}%"></div><span>${esc(sem.name)}</span></div>`;
+  }).join("");
+}
+
+/* Event delegation: one listener handles every input/button */
+app.addEventListener("input", e => {
+  const t = e.target, si = t.dataset.si, f = t.dataset.f;
+  if (!f) return;
+  if (f === "semname") state.semesters[si].name = t.value;
+  else state.semesters[si].subjects[t.dataset.bi][f] = t.value;
+  save(); update();
+});
+document.addEventListener("click", e => {
+  const b = e.target.closest("button[data-act]");
+  if (!b) return;
+  const { act, si, bi } = b.dataset;
+  if (act === "addsem") state.semesters.push({ name: `Sem ${state.semesters.length + 1}`, subjects: [newSubject()] });
+  if (act === "addsub") state.semesters[si].subjects.push(newSubject());
+  if (act === "delsub") state.semesters[si].subjects.splice(bi, 1);
+  if (act === "delsem" && confirm("Delete this semester?")) state.semesters.splice(si, 1);
+  save(); render();
+});
+
+render();
+runTests();
+</script>
+</body>
+</html>
